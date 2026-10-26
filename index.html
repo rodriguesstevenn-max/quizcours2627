@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#3a1c78">
+<title>Quiz Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="player">
+<main id="app"></main>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+(async function () {
+  "use strict";
+  const { DB, esc, shape, ordinal, store } = QL;
+  const app = document.getElementById("app");
+  const KEY = "quizlive-player"; // par onglet : plusieurs onglets = plusieurs joueurs (utile en mode démo)
+
+  let code = null, pid = null, me = null, st = null;
+  const answered = {};            // question -> réponse choisie
+  let timerId = null;
+  const unsubs = [];
+
+  // ---------- Écran d'entrée ----------
+  function joinScreen(msg, prefill) {
+    unsubs.splice(0).forEach(u => u());
+    clearInterval(timerId);
+    document.body.className = "player";
+    app.innerHTML = `
+      <section class="join">
+        <h1 class="logo">Quiz<span>Live</span></h1>
+        ${DB.mode === "demo" ? '<p class="mode demo">● Mode démo (même ordinateur que le prof)</p>' : ""}
+        <form id="f" autocomplete="off">
+          <input id="code" inputmode="numeric" maxlength="7" placeholder="Code de la partie" value="${esc(prefill || "")}">
+          <input id="name" maxlength="15" placeholder="Ton pseudo">
+          <button class="btn big" id="go">C'est parti !</button>
+          <p class="err" id="err">${esc(msg || "")}</p>
+        </form>
+      </section>`;
+    document.getElementById(prefill ? "name" : "code").focus();
+    document.getElementById("f").onsubmit = e => { e.preventDefault(); join(); };
+  }
+
+  async function join() {
+    const err = t => { document.getElementById("err").textContent = t; document.getElementById("go").disabled = false; };
+    const c = document.getElementById("code").value.replace(/\D/g, "");
+    const name = document.getElementById("name").value.trim().replace(/\s+/g, " ");
+    if (c.length !== 6) return err("Le code fait 6 chiffres : il est affiché à l'écran.");
+    if (!name) return err("Choisis un pseudo.");
+    document.getElementById("go").disabled = true;
+    try {
+      const s = await DB.get(`games/${c}/state`);
+      if (!s) return err("Code introuvable. Vérifie le code affiché à l'écran.");
+      if (s.phase === "end") return err("Cette partie est terminée.");
+      const ps = (await DB.get(`games/${c}/players`)) || {};
+      const saved = store.get(KEY, "session");
+      const id = saved && saved.code === c && saved.pid ? saved.pid : Math.random().toString(36).slice(2, 10);
+      const taken = Object.entries(ps).some(([k, p]) => k !== id && String(p.name || "").toLowerCase() === name.toLowerCase());
+      if (taken) return err("Ce pseudo est déjà pris, choisis-en un autre.");
+      if (ps[id]) await DB.update(`games/${c}/players/${id}`, { name });
+      else await DB.set(`games/${c}/players/${id}`, { name, score: 0, streak: 0 });
+      code = c; pid = id;
+      store.set(KEY, { code, pid }, "session");
+      enterGame();
+    } catch (e) {
+      err("Connexion impossible. Vérifie ton réseau (Wi-Fi ou 4G) et réessaie.");
+    }
+  }
+
+  // ---------- Partie ----------
+  function enterGame() {
+    unsubs.splice(0).forEach(u => u());
+    me = null; st = null;
+    unsubs.push(DB.on(`games/${code}/state`, v => { st = v; onState(); }));
+    unsubs.push(DB.on(`games/${code}/players/${pid}`, v => {
+      const had = me;
+      me = v;
+      if (had && !v) return leave("Tu as été retiré de la partie.");
+      render();
+    }));
+    keepAwake();
+  }
+
+  function leave(msg) {
+    store.del(KEY, "session");
+    code = pid = me = st = null;
+    joinScreen(msg, "");
+  }
+
+  async function onState() {
+    if (!st) return leave("Cette partie n'existe plus.");
+    // Après un rechargement : a-t-on déjà répondu à la question en cours ?
+    if (st.phase === "question" && answered[st.q] === undefined) {
+      const a = await DB.get(`games/${code}/answers/${st.q}/${pid}`);
+      if (a && Number.isInteger(a.a)) answered[st.q] = a.a;
+    }
+    render();
+  }
+
+  const remaining = () => st.duration * 1000 - (DB.now() - st.startedAt);
+
+  function render() {
+    clearInterval(timerId);
+    if (!st || !me) return;
+    let body = "", mood = "";
+    switch (st.phase) {
+      case "lobby":
+        body = msg("✅", "Tu es dans la partie !", "Ton pseudo s'affiche à l'écran. Le quiz va bientôt commencer…");
+        break;
+      case "get-ready":
+        body = `<div class="msg"><p class="qnum">Question ${st.q + 1} / ${st.total}</p><h2>Prépare-toi !</h2>
+                <p>Lis la question à l'écran…</p><div class="loader"><div></div></div></div>`;
+        break;
+      case "question":
+        body = questionBody();
+        break;
+      case "reveal": {
+        const r = revealBody();
+        body = r.html; mood = r.mood;
+        break;
+      }
+      case "leaderboard":
+        body = msg("📊", `Tu es ${ordinal(me.rank || 1)}`, `${me.score || 0} points · prochaine question dans un instant`);
+        break;
+      case "end": {
+        const medal = ["🥇", "🥈", "🥉"][(me.rank || 99) - 1] || "🏁";
+        body = msg(medal, `Classement final : ${ordinal(me.rank || 1)}`, `${me.score || 0} points. Merci d'avoir joué !`);
+        break;
+      }
+    }
+    document.body.className = "player " + mood;
+    app.innerHTML = `
+      <header class="me"><span>${esc(me.name)}</span><span class="score">${me.score || 0} pts</span></header>
+      ${body}`;
+
+    if (st.phase === "question" && answered[st.q] === undefined && remaining() > 0) {
+      app.querySelectorAll(".pad").forEach(b => b.onclick = () => answer(+b.dataset.a));
+      const dur = st.duration * 1000;
+      timerId = setInterval(() => {
+        const rem = remaining(), f = document.getElementById("tfill");
+        if (f) f.style.width = Math.max(0, rem / dur * 100) + "%";
+        if (rem <= 0) render();
+      }, 150);
+    }
+  }
+
+  const msg = (emoji, title, text) =>
+    `<div class="msg"><div class="big-emoji">${emoji}</div><h2>${title}</h2><p>${text}</p></div>`;
+
+  function questionBody() {
+    const mine = answered[st.q];
+    if (mine !== undefined) {
+      return `<div class="msg"><div class="answer-chip c${mine}">${shape(mine)}</div>
+              <h2>Réponse envoyée !</h2><p>Regarde l'écran…</p></div>`;
+    }
+    if (remaining() <= 0) return msg("⏰", "Temps écoulé", "Attends la correction…");
+    const opts = st.options || [];
+    return `
+      <p class="q-text">${esc(st.text)}</p>
+      <div class="tbar"><div id="tfill"></div></div>
+      <div class="pads n${opts.length}">${opts.map((o, k) =>
+        `<button class="pad c${k}" data-a="${k}">${shape(k)}<span>${esc(o)}</span></button>`).join("")}</div>`;
+  }
+
+  function revealBody() {
+    if (me.lastQ !== st.q) return { html: msg("⏳", "Correction…", "Calcul des points"), mood: "" };
+    const rank = `<p class="rank">Tu es ${ordinal(me.rank || 1)} sur ${st.nPlayers || 1}</p>`;
+    const goodAnswer = st.options ? esc(st.options[st.correct]) : "";
+    if (me.lastCorrect) {
+      return {
+        mood: "good",
+        html: `<div class="msg"><div class="big-emoji">🎉</div><h2>Bonne réponse !</h2>
+               <p class="pts">+${me.lastPoints || 0}</p>
+               ${me.streak >= 2 ? `<p class="streak-tag">🔥 Série de ${me.streak} bonnes réponses</p>` : ""}
+               ${rank}</div>`
+      };
+    }
+    const missed = me.lastAnswer === undefined || me.lastAnswer === null;
+    return {
+      mood: "bad",
+      html: `<div class="msg"><div class="big-emoji">${missed ? "⏰" : "❌"}</div>
+             <h2>${missed ? "Pas de réponse" : "Raté !"}</h2>
+             <p class="goodans">La bonne réponse : <b>${goodAnswer}</b></p>${rank}</div>`
+    };
+  }
+
+  async function answer(k) {
+    const q = st.q;
+    if (answered[q] !== undefined) return;
+    answered[q] = k;
+    if (navigator.vibrate) navigator.vibrate(40);
+    render();
+    try { await DB.set(`games/${code}/answers/${q}/${pid}`, { a: k, t: DB.TS }); } catch (e) { /* déjà enregistrée */ }
+  }
+
+  // Empêche le téléphone de se mettre en veille pendant la partie
+  async function keepAwake() {
+    try { if ("wakeLock" in navigator) await navigator.wakeLock.request("screen"); } catch (e) {}
+  }
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && code) keepAwake(); });
+
+  // ---------- Démarrage ----------
+  try {
+    await DB.ready();
+  } catch (e) {
+    app.innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
+    return;
+  }
+  const urlCode = (new URLSearchParams(location.search).get("code") || "").replace(/\D/g, "");
+  const saved = store.get(KEY, "session");
+  if (saved && saved.code && (!urlCode || urlCode === saved.code)) {
+    const [p, s] = await Promise.all([DB.get(`games/${saved.code}/players/${saved.pid}`), DB.get(`games/${saved.code}/state`)]);
+    if (p && s) { code = saved.code; pid = saved.pid; return enterGame(); }
+  }
+  joinScreen("", urlCode);
+})();
+</script>
+</body>
+</html>
