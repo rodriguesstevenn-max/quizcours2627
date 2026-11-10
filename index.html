@@ -9,13 +9,13 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800;900&display=swap" rel="stylesheet">
 <!-- « ?v=… » : à augmenter à chaque mise à jour, pour que les téléphones rechargent tous les fichiers ensemble -->
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body class="player">
 <main id="app"></main>
 
-<script src="config.js?v=3"></script>
-<script src="common.js?v=3"></script>
+<script src="config.js?v=4"></script>
+<script src="common.js?v=4"></script>
 <script>
 (async function () {
   "use strict";
@@ -26,6 +26,7 @@
 
   let code = null, pid = null, me = null, st = null;
   const answered = {};            // question -> réponse choisie
+  const refused = {};             // question -> réponse refusée par le serveur
   let celebrated = -1;            // dernière question dont la correction a été animée
   let jokerArmed = -1;            // question sur laquelle le joker est activé (pas encore envoyé)
   let jokerSent = -1;             // question sur laquelle le joker est parti avec la réponse
@@ -84,6 +85,7 @@
     unsubs.splice(0).forEach(u => u());
     me = null; st = null; celebrated = jokerArmed = jokerSent = -1; introSeen = false;
     for (const q in answered) delete answered[q];
+    for (const q in refused) delete refused[q];
     unsubs.push(DB.on(`games/${code}/state`, v => { st = v; onState(); }));
     unsubs.push(DB.on(`games/${code}/players/${pid}`, v => {
       const had = me;
@@ -247,6 +249,7 @@
 
   function questionBody() {
     const mine = answered[st.q];
+    if (refused[st.q]) return msg("⚠️", "Réponse non enregistrée", "Le serveur l'a refusée. Préviens ton prof !");
     const jokerTag = jokerSent === st.q ? '<p class="joker-tag">🃏 Joker joué : quitte ou double !</p>' : "";
     if (typeof mine === "string") {
       return `<div class="msg"><div class="big-emoji">✍️</div><h2>Réponse envoyée !</h2>
@@ -323,7 +326,13 @@
     render();
     const payload = typeof k === "string" ? { x: k.slice(0, 60), t: DB.TS } : { a: k, t: DB.TS };
     if (joker) payload.j = 1;
-    try { await DB.set(`games/${code}/answers/${q}/${pid}`, payload); } catch (e) { /* déjà enregistrée */ }
+    try { await DB.set(`games/${code}/answers/${q}/${pid}`, payload); }
+    catch (e) {
+      // Refus du serveur (règles Firebase pas à jour…) : le dire, plutôt qu'afficher « Réponse envoyée »
+      refused[q] = true;
+      if (joker) jokerSent = -1;
+      if (st && st.q === q) render();
+    }
   }
 
   // Empêche le téléphone de se mettre en veille pendant la partie

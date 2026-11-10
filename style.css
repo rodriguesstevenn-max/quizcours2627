@@ -90,6 +90,8 @@ body.host { font-size: clamp(15px, 1.45vw, 34px); }
 .lobby-bar .count { background: rgba(0, 0, 0, .3); border-radius: 8px; padding: .4em .9em; font-weight: 700; }
 .lobby-bar .count b { font-size: 1.4em; }
 .lobby-bar .quiz-title { font-weight: 800; text-align: center; flex: 1; }
+.time-pick { display: flex; align-items: center; gap: .5em; font-weight: 700; font-size: .9em; background: rgba(0, 0, 0, .3); border-radius: 8px; padding: .35em .7em; }
+.time-pick select { font: inherit; font-weight: 800; color: var(--cardink); border: 0; border-radius: 6px; padding: .25em .4em; cursor: pointer; }
 .players { display: flex; flex-wrap: wrap; gap: .6em; justify-content: center; align-content: flex-start; flex: 1; }
 .player-chip { background: rgba(255, 255, 255, .14); color: #fff; border: 0; border-radius: 8px; padding: .45em .9em; font-weight: 800; font-size: 1.05em; animation: pop .35s ease-out; }
 .player-chip:hover { background: var(--bad); text-decoration: line-through; }
