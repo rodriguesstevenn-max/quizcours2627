@@ -8,17 +8,19 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<!-- « ?v=… » : à augmenter à chaque mise à jour, pour que les téléphones rechargent tous les fichiers ensemble -->
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body class="player">
 <main id="app"></main>
 
-<script src="config.js"></script>
-<script src="common.js"></script>
+<script src="config.js?v=3"></script>
+<script src="common.js?v=3"></script>
 <script>
 (async function () {
   "use strict";
   const { DB, esc, shape, ordinal, countUp, store, JOKER_PENALTY } = QL;
+  const avatar = QL.avatar || (() => "🙂");
   const app = document.getElementById("app");
   const KEY = "quizlive-player"; // par onglet : plusieurs onglets = plusieurs joueurs (utile en mode démo)
 
@@ -27,6 +29,7 @@
   let celebrated = -1;            // dernière question dont la correction a été animée
   let jokerArmed = -1;            // question sur laquelle le joker est activé (pas encore envoyé)
   let jokerSent = -1;             // question sur laquelle le joker est parti avec la réponse
+  let introSeen = false;          // mon pseudo est déjà passé à l'écran de présentation
   let timerId = null;
   const unsubs = [];
 
@@ -79,7 +82,7 @@
   // ---------- Partie ----------
   function enterGame() {
     unsubs.splice(0).forEach(u => u());
-    me = null; st = null; celebrated = jokerArmed = jokerSent = -1;
+    me = null; st = null; celebrated = jokerArmed = jokerSent = -1; introSeen = false;
     for (const q in answered) delete answered[q];
     unsubs.push(DB.on(`games/${code}/state`, v => { st = v; onState(); }));
     unsubs.push(DB.on(`games/${code}/players/${pid}`, v => {
@@ -156,6 +159,21 @@
                 <p class="joker-info">🃏 Tu as <b>un joker quitte ou double</b> pour toute la partie. Active-le avant de répondre :
                   points x2 si tu as juste, −${JOKER_PENALTY} si tu te trompes.</p></div>`;
         break;
+      case "intro": {
+        // Présentation des joueurs : le téléphone s'allume quand son pseudo passe à l'écran
+        const mine = st.who === pid;
+        if (mine && !introSeen && navigator.vibrate) navigator.vibrate([80, 60, 80]);
+        if (mine) introSeen = true;
+        mood = mine ? "good" : "";
+        body = mine
+          ? `<div class="msg"><div class="big-emoji">${avatar(pid)}</div><h2>C'est toi !</h2><p>Ton pseudo est à l'écran 🎉</p></div>`
+          : `<div class="msg"><div class="big-emoji">🎤</div><h2>${st.done ? "Tout le monde est là !" : "Les présentations"}</h2>
+             <p>${st.done ? "Le quiz commence dans un instant…"
+               : introSeen ? "Ton pseudo est passé à l'écran : regarde les autres arriver !"
+               : "Ton pseudo va apparaître à l'écran… guette-le !"}</p>
+             <p class="joker-info">Ton avatar : <b>${avatar(pid)}</b></p></div>`;
+        break;
+      }
       case "get-ready":
         body = `<div class="msg">${st.double ? '<p class="x2-banner">⚡ Double points ⚡</p>' : ""}
                 <p class="qnum">Question ${st.q + 1} / ${st.total}</p><h2>Prépare-toi !</h2>

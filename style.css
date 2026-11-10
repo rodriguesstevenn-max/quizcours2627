@@ -193,6 +193,22 @@ body.host { font-size: clamp(15px, 1.45vw, 34px); }
 .banner span { font-weight: 700; color: var(--muted); }
 @keyframes zoomin { from { transform: translate(-50%, -50%) scale(.3); opacity: 0; } }
 
+/* Présentation des joueurs avant la première question */
+.intro { flex: 1; display: flex; flex-direction: column; }
+.intro h1 { text-align: center; font-size: 2.2em; font-weight: 900; padding: .8em 0 .2em; }
+.intro-sub { text-align: center; font-size: 1.5em; font-weight: 700; color: var(--muted); min-height: 1.5em; }
+.intro-sub b { color: var(--gold); }
+.cast { flex: 1; display: flex; flex-wrap: wrap; justify-content: center; align-content: center; gap: .7em; padding: 1em 1.5em; }
+.cast-card { background: #fff; color: var(--cardink); border: 0; border-radius: 12px; padding: .45em .9em; font-weight: 900; font-size: 1.25em; display: flex; align-items: center; gap: .4em; box-shadow: 0 5px 0 rgba(0, 0, 0, .25); transition: box-shadow .3s, transform .3s; }
+.cast-card .av { font-size: 1.4em; line-height: 1; }
+.cast-card.pop { animation: castin .5s cubic-bezier(.3, 1.6, .5, 1); }
+.cast-card.on { transform: scale(1.12); box-shadow: 0 0 0 .2em var(--gold), 0 5px 0 rgba(0, 0, 0, .25); }
+.cast-card:hover { background: var(--bad); color: #fff; text-decoration: line-through; }
+@keyframes castin { from { transform: scale(0) rotate(-10deg); opacity: 0; } }
+.intro .actions { align-items: center; }
+.intro-count { flex: 1; font-weight: 800; }
+.intro-count b { font-size: 1.6em; color: var(--gold); }
+
 /* Annonce des questions à double points */
 .announce { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .6em; text-align: center; animation: flash .35s steps(1) infinite; }
 .announce h1 { font-size: 4.2em; line-height: 1.1; font-weight: 900; color: var(--gold); text-shadow: 0 .06em 0 rgba(0, 0, 0, .3); animation: zoomin2 .6s cubic-bezier(.3, 1.6, .5, 1); }

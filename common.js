@@ -174,5 +174,14 @@
   // Joker quitte ou double : points perdus quand il tombe sur une mauvaise réponse (lu par le prof et les téléphones)
   const JOKER_PENALTY = 500;
 
-  window.QL = { DB: online ? firebaseDB() : demoDB(), shape, esc, sleep, ordinal, countUp, studentUrl, store, JOKER_PENALTY };
+  // Un avatar animal par joueur, toujours le même pour un même identifiant (écran de présentation)
+  const AVATARS = ["🦊", "🐼", "🐸", "🦁", "🐯", "🐙", "🦄", "🐧", "🐨", "🦉", "🐝", "🐢", "🦖", "🐬", "🦩", "🐹",
+    "🐰", "🦝", "🐻", "🐮", "🐷", "🐵", "🦒", "🦓", "🦔", "🦦", "🦥", "🐳", "🦈", "🐞", "🐺", "🦘"];
+  function avatar(id) {
+    let h = 0;
+    for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return AVATARS[h % AVATARS.length];
+  }
+
+  window.QL = { DB: online ? firebaseDB() : demoDB(), shape, esc, sleep, ordinal, countUp, studentUrl, store, JOKER_PENALTY, avatar };
 })();
