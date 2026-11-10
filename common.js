@@ -13,6 +13,9 @@
     typeof firebaseConfig !== "undefined" ? firebaseConfig : null
   ];
   const cfg = candidates.find(valid) || null;
+  // « ?demo » dans l'adresse force le mode démo (répétition seul, sans toucher à Firebase)
+  const forceDemo = /[?&]demo\b/.test(location.search);
+  const online = !!cfg && !forceDemo;
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -144,10 +147,21 @@
 
   const ordinal = n => n === 1 ? "1<sup>er</sup>" : n + "<sup>e</sup>";
 
+  // Compteur qui défile de « from » à « to » (votes, points), en ralentissant à la fin
+  function countUp(el, from, to, ms) {
+    const t0 = performance.now();
+    const step = now => {
+      const k = Math.min(1, (now - t0) / ms);
+      el.textContent = Math.round(from + (to - from) * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   function studentUrl() {
     const u = typeof STUDENT_URL !== "undefined" ? String(STUDENT_URL || "").trim() : "";
-    if (u) return u;
-    return location.href.split(/[?#]/)[0].replace(/[^/]*$/, "index.html");
+    if (u && online) return u;
+    return location.href.split(/[?#]/)[0].replace(/[^/]*$/, "index.html") + (forceDemo ? "?demo" : "");
   }
 
   // Petit stockage navigateur, sans jamais planter (navigation privée, etc.)
@@ -157,5 +171,8 @@
     del(k, kind) { try { window[kind + "Storage"].removeItem(k); } catch (e) {} }
   };
 
-  window.QL = { DB: cfg ? firebaseDB() : demoDB(), shape, esc, sleep, ordinal, studentUrl, store };
+  // Joker quitte ou double : points perdus quand il tombe sur une mauvaise réponse (lu par le prof et les téléphones)
+  const JOKER_PENALTY = 500;
+
+  window.QL = { DB: online ? firebaseDB() : demoDB(), shape, esc, sleep, ordinal, countUp, studentUrl, store, JOKER_PENALTY };
 })();

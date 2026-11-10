@@ -18,12 +18,15 @@
 <script>
 (async function () {
   "use strict";
-  const { DB, esc, shape, ordinal, store } = QL;
+  const { DB, esc, shape, ordinal, countUp, store, JOKER_PENALTY } = QL;
   const app = document.getElementById("app");
   const KEY = "quizlive-player"; // par onglet : plusieurs onglets = plusieurs joueurs (utile en mode démo)
 
   let code = null, pid = null, me = null, st = null;
   const answered = {};            // question -> réponse choisie
+  let celebrated = -1;            // dernière question dont la correction a été animée
+  let jokerArmed = -1;            // question sur laquelle le joker est activé (pas encore envoyé)
+  let jokerSent = -1;             // question sur laquelle le joker est parti avec la réponse
   let timerId = null;
   const unsubs = [];
 
@@ -57,7 +60,7 @@
     try {
       const s = await DB.get(`games/${c}/state`);
       if (!s) return err("Code introuvable. Vérifie le code affiché à l'écran.");
-      if (s.phase === "end") return err("Cette partie est terminée.");
+      if (s.phase === "end" || s.phase === "podium") return err("Cette partie est terminée.");
       const ps = (await DB.get(`games/${c}/players`)) || {};
       const saved = store.get(KEY, "session");
       const id = saved && saved.code === c && saved.pid ? saved.pid : Math.random().toString(36).slice(2, 10);
@@ -76,7 +79,8 @@
   // ---------- Partie ----------
   function enterGame() {
     unsubs.splice(0).forEach(u => u());
-    me = null; st = null;
+    me = null; st = null; celebrated = jokerArmed = jokerSent = -1;
+    for (const q in answered) delete answered[q];
     unsubs.push(DB.on(`games/${code}/state`, v => { st = v; onState(); }));
     unsubs.push(DB.on(`games/${code}/players/${pid}`, v => {
       const had = me;
@@ -99,8 +103,38 @@
     if (st.phase === "question" && answered[st.q] === undefined) {
       const a = await DB.get(`games/${code}/answers/${st.q}/${pid}`);
       if (a && Number.isInteger(a.a)) answered[st.q] = a.a;
+      else if (a && typeof a.x === "string") answered[st.q] = a.x;
+      if (a && a.j) jokerSent = st.q;
     }
     render();
+  }
+
+  // ---------- Joker quitte ou double (un par partie) ----------
+  const jokerLeft = () => !!me && me.jokerQ == null && jokerSent < 0;
+  function jokerButton() {
+    if (!jokerLeft() || st.kind === "ouverte" || answered[st.q] !== undefined) return "";
+    const on = jokerArmed === st.q;
+    return `<button class="joker${on ? " on" : ""}" id="joker">${on
+      ? `🃏 Joker activé : x2 si juste, −${JOKER_PENALTY} si faux`
+      : "🃏 Jouer mon joker sur cette question"}</button>`;
+  }
+
+  // ---------- Le rival : se comparer au joueur juste devant ----------
+  function rivalTag() {
+    if (st.secret || !me) return "";
+    if (me.ahead) return `<p class="rival">🎯 Plus que <b>${me.ahead.g}</b> pts pour rattraper <b>${esc(me.ahead.n)}</b></p>`;
+    if (me.behind) return me.behind.g > 0
+      ? `<p class="rival lead">👑 En tête · ${esc(me.behind.n)} est à ${me.behind.g} pts</p>`
+      : `<p class="rival">⚔️ À égalité avec ${esc(me.behind.n)}</p>`;
+    return "";
+  }
+  function passTags() {
+    if (st.secret) return "";
+    const others = k => k > 1 ? ` et ${k - 1} autre${k > 2 ? "s" : ""}` : "";
+    let out = "";
+    if (me.passed) out += `<p class="pass up">🚀 Tu as doublé ${esc(me.passed.n)}${others(me.passed.k)} !</p>`;
+    if (me.passedBy) out += `<p class="pass down">😱 ${esc(me.passedBy.n)}${others(me.passedBy.k)} ${me.passedBy.k > 1 ? "te dépassent" : "te dépasse"}</p>`;
+    return out;
   }
 
   const remaining = () => st.duration * 1000 - (DB.now() - st.startedAt);
@@ -108,43 +142,83 @@
   function render() {
     clearInterval(timerId);
     if (!st || !me) return;
+    // Correction : les points défilent et le téléphone vibre, une seule fois par question
+    const celebrate = st.phase === "reveal" && me.lastQ === st.q && st.kind !== "ouverte" && celebrated !== st.q;
+    if (celebrate) celebrated = st.q;
+    // Le joker envoyé n'a pas été retenu (réponse hors délai) : il redevient disponible
+    if (st.phase === "reveal" && me.lastQ === st.q && jokerSent === st.q && me.jokerQ == null) jokerSent = -1;
+    const typed = document.getElementById("txt") ? document.getElementById("txt").value : "";
     let body = "", mood = "";
     switch (st.phase) {
       case "lobby":
-        body = msg("✅", "Tu es dans la partie !", "Ton pseudo s'affiche à l'écran. Le quiz va bientôt commencer…");
+        body = `<div class="msg"><div class="big-emoji">✅</div><h2>Tu es dans la partie !</h2>
+                <p>Ton pseudo s'affiche à l'écran. Le quiz va bientôt commencer…</p>
+                <p class="joker-info">🃏 Tu as <b>un joker quitte ou double</b> pour toute la partie. Active-le avant de répondre :
+                  points x2 si tu as juste, −${JOKER_PENALTY} si tu te trompes.</p></div>`;
         break;
       case "get-ready":
-        body = `<div class="msg"><p class="qnum">Question ${st.q + 1} / ${st.total}</p><h2>Prépare-toi !</h2>
-                <p>Lis la question à l'écran…</p><div class="loader"><div></div></div></div>`;
+        body = `<div class="msg">${st.double ? '<p class="x2-banner">⚡ Double points ⚡</p>' : ""}
+                <p class="qnum">Question ${st.q + 1} / ${st.total}</p><h2>Prépare-toi !</h2>
+                <p>Lis la question à l'écran…</p><div class="loader"><div></div></div>${rivalTag()}${jokerButton()}</div>`;
         break;
       case "question":
         body = questionBody();
         break;
       case "reveal": {
-        const r = revealBody();
+        const r = revealBody(celebrate);
         body = r.html; mood = r.mood;
         break;
       }
       case "leaderboard":
-        body = msg("📊", `Tu es ${ordinal(me.rank || 1)}`, `${me.score || 0} points · prochaine question dans un instant`);
+        body = st.secret
+          ? `<div class="msg"><div class="big-emoji">🤫</div><h2>Classement secret</h2>
+             <p>${me.score || 0} points · tout se joue maintenant. Révélation au podium !</p></div>`
+          : `<div class="msg"><div class="big-emoji">📊</div><h2>Tu es ${ordinal(me.rank || 1)}</h2>${moveTag()}${rivalTag()}
+             <p>${me.score || 0} points · prochaine question dans un instant</p></div>`;
+        break;
+      case "podium":
+        body = msg("🥁", "Le podium arrive…", "Regarde l'écran !");
         break;
       case "end": {
         const medal = ["🥇", "🥈", "🥉"][(me.rank || 99) - 1] || "🏁";
-        body = msg(medal, `Classement final : ${ordinal(me.rank || 1)}`, `${me.score || 0} points. Merci d'avoir joué !`);
+        const awards = Object.values(me.awards || {}).map(a => `<p class="award-tag">🏅 Trophée ${esc(a)}</p>`).join("");
+        body = `<div class="msg"><div class="big-emoji">${medal}</div><h2>Classement final : ${ordinal(me.rank || 1)}</h2>
+                <p>${me.score || 0} points. Merci d'avoir joué !</p>${awards}</div>`;
         break;
       }
     }
-    document.body.className = "player " + mood;
+    document.body.className = "player " + mood + (celebrate ? " celebrate" : "");
+    const score = me.score || 0;
     app.innerHTML = `
-      <header class="me"><span>${esc(me.name)}</span><span class="score">${me.score || 0} pts</span></header>
+      <header class="me"><span>${esc(me.name)}</span>
+        ${jokerLeft() && st.phase !== "end" ? '<span class="jk" title="Joker disponible">🃏</span>' : ""}
+        <span class="score"><span data-count="${score}">${celebrate ? score - (me.lastPoints || 0) : score}</span> pts</span></header>
       ${body}`;
+    if (celebrate) {
+      app.querySelectorAll("[data-count]").forEach(el => countUp(el, +el.textContent, +el.dataset.count, 1200));
+      if (navigator.vibrate) navigator.vibrate(me.lastCorrect ? [60, 50, 60] : 300);
+    }
+    const jb = document.getElementById("joker");
+    if (jb) jb.onclick = () => {
+      jokerArmed = jokerArmed === st.q ? -1 : st.q;
+      if (navigator.vibrate) navigator.vibrate(jokerArmed === st.q ? [30, 40, 30] : 20);
+      render();
+    };
 
     if (st.phase === "question" && answered[st.q] === undefined && remaining() > 0) {
       app.querySelectorAll(".pad").forEach(b => b.onclick = () => answer(+b.dataset.a));
+      const form = document.getElementById("write");
+      if (form) {
+        const input = document.getElementById("txt");
+        input.value = typed; // un nouvel affichage (joker, classement) ne doit pas effacer ce qui est tapé
+        form.onsubmit = e => { e.preventDefault(); const v = input.value.trim(); if (v) answer(v); };
+        input.focus();
+      }
       const dur = st.duration * 1000;
       timerId = setInterval(() => {
         const rem = remaining(), f = document.getElementById("tfill");
         if (f) f.style.width = Math.max(0, rem / dur * 100) + "%";
+        document.body.classList.toggle("hurry", rem > 0 && rem <= 5000); // l'écran pulse en rouge à la fin
         if (rem <= 0) render();
       }, 150);
     }
@@ -155,28 +229,56 @@
 
   function questionBody() {
     const mine = answered[st.q];
+    const jokerTag = jokerSent === st.q ? '<p class="joker-tag">🃏 Joker joué : quitte ou double !</p>' : "";
+    if (typeof mine === "string") {
+      return `<div class="msg"><div class="big-emoji">✍️</div><h2>Réponse envoyée !</h2>
+              <p class="goodans">« ${esc(mine)} »</p>${jokerTag}<p>Regarde l'écran…</p></div>`;
+    }
     if (mine !== undefined) {
       return `<div class="msg"><div class="answer-chip c${mine}">${shape(mine)}</div>
-              <h2>Réponse envoyée !</h2><p>Regarde l'écran…</p></div>`;
+              <h2>Réponse envoyée !</h2>${jokerTag}<p>Regarde l'écran…</p></div>`;
     }
     if (remaining() <= 0) return msg("⏰", "Temps écoulé", "Attends la correction…");
+    const head = `<p class="q-text">${st.double ? '<span class="x2-tag">⚡ x2</span> ' : ""}${esc(st.text)}</p>
+        <div class="tbar"><div id="tfill"></div></div>${jokerButton()}`;
+    if (st.kind === "texte" || st.kind === "ouverte") {
+      return `
+        ${head}
+        <form class="write" id="write" autocomplete="off">
+          <input id="txt" maxlength="60" placeholder="${st.kind === "ouverte" ? "Ta réponse, en quelques mots" : "Ta réponse"}">
+          <button class="btn big">Envoyer</button>
+          ${st.kind === "ouverte" ? "<p class=\"note\">Question ouverte : pas de points. Les réponses s'affichent à l'écran, sans les pseudos.</p>" : ""}
+        </form>`;
+    }
     const opts = st.options || [];
     return `
-      <p class="q-text">${esc(st.text)}</p>
-      <div class="tbar"><div id="tfill"></div></div>
+      ${head}
       <div class="pads n${opts.length}">${opts.map((o, k) =>
         `<button class="pad c${k}" data-a="${k}">${shape(k)}<span>${esc(o)}</span></button>`).join("")}</div>`;
   }
 
-  function revealBody() {
+  // Places gagnées ou perdues depuis la question précédente
+  function moveTag() {
+    const m = me.move, n = Math.abs(m || 0), s = n > 1 ? "s" : "";
+    if (!n || st.phase === "end") return "";
+    return `<p class="move">${m > 0 ? `▲ ${n} place${s} gagnée${s}` : `▼ ${n} place${s} perdue${s}`}</p>`;
+  }
+
+  function revealBody(celebrate) {
     if (me.lastQ !== st.q) return { html: msg("⏳", "Correction…", "Calcul des points"), mood: "" };
-    const rank = `<p class="rank">Tu es ${ordinal(me.rank || 1)} sur ${st.nPlayers || 1}</p>`;
-    const goodAnswer = st.options ? esc(st.options[st.correct]) : "";
+    if (st.kind === "ouverte") return { html: msg("💬", "Merci !", "Regarde les réponses de la classe à l'écran."), mood: "" };
+    const rank = st.secret
+      ? '<p class="rank">🤫 Classement secret jusqu’au podium</p>'
+      : `<p class="rank">Tu es ${ordinal(me.rank || 1)} sur ${st.nPlayers || 1}</p>${moveTag()}${passTags()}`;
+    const goodAnswer = st.kind === "texte" ? esc(st.accepted) : st.options ? esc(st.options[st.correct]) : "";
+    const pts = me.lastPoints || 0;
     if (me.lastCorrect) {
       return {
         mood: "good",
-        html: `<div class="msg"><div class="big-emoji">🎉</div><h2>Bonne réponse !</h2>
-               <p class="pts">+${me.lastPoints || 0}</p>
+        html: `<div class="msg"><div class="big-emoji">${me.lastJoker ? "🃏" : "🎉"}</div><h2>Bonne réponse !</h2>
+               <p class="pts">+<span data-count="${pts}">${celebrate ? 0 : pts}</span></p>
+               ${me.lastJoker ? '<p class="joker-tag">Quitte ou double gagné : points x2 !</p>' : ""}
+               ${st.double ? '<p class="x2-banner small">⚡ Question à double points</p>' : ""}
                ${me.streak >= 2 ? `<p class="streak-tag">🔥 Série de ${me.streak} bonnes réponses</p>` : ""}
                ${rank}</div>`
       };
@@ -186,6 +288,9 @@
       mood: "bad",
       html: `<div class="msg"><div class="big-emoji">${missed ? "⏰" : "❌"}</div>
              <h2>${missed ? "Pas de réponse" : "Raté !"}</h2>
+             ${me.lastJoker ? `<p class="pts">−<span data-count="${-pts}">${celebrate ? 0 : -pts}</span></p>
+               <p class="joker-tag">🃏 Joker perdu…</p>` : ""}
+             ${!missed && st.kind === "texte" ? `<p>Ta réponse : « ${esc(me.lastAnswer)} »</p>` : ""}
              <p class="goodans">La bonne réponse : <b>${goodAnswer}</b></p>${rank}</div>`
     };
   }
@@ -194,9 +299,13 @@
     const q = st.q;
     if (answered[q] !== undefined) return;
     answered[q] = k;
+    const joker = jokerArmed === q && jokerLeft() && st.kind !== "ouverte";
+    if (joker) jokerSent = q;
     if (navigator.vibrate) navigator.vibrate(40);
     render();
-    try { await DB.set(`games/${code}/answers/${q}/${pid}`, { a: k, t: DB.TS }); } catch (e) { /* déjà enregistrée */ }
+    const payload = typeof k === "string" ? { x: k.slice(0, 60), t: DB.TS } : { a: k, t: DB.TS };
+    if (joker) payload.j = 1;
+    try { await DB.set(`games/${code}/answers/${q}/${pid}`, payload); } catch (e) { /* déjà enregistrée */ }
   }
 
   // Empêche le téléphone de se mettre en veille pendant la partie
